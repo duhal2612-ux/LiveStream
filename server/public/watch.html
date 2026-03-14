@@ -1,0 +1,623 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>LiveStream - Tonton</title>
+  <script src="/socket.io/socket.io.js"></script>
+  <script src="https://unpkg.com/simple-peer@9.11.1/simplepeer.min.js"></script>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      background: #0a0a0f;
+      color: #fff;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+    }
+
+    /* ── Lobby Screen ── */
+    #lobby-screen {
+      width: 100%;
+      max-width: 480px;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      padding: 24px 16px;
+    }
+    .lobby-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 8px;
+    }
+    .lobby-header h1 { font-size: 22px; font-weight: 700; color: #FFD700; }
+    #btn-refresh {
+      background: #1a1a2e;
+      border: 1px solid #333;
+      border-radius: 8px;
+      color: #ccc;
+      font-size: 13px;
+      padding: 6px 12px;
+      cursor: pointer;
+    }
+    .lobby-subtitle { font-size: 13px; color: #666; margin-bottom: 20px; }
+
+    #stream-list {
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+      overflow-y: auto;
+    }
+
+    .stream-card {
+      background: #1a1a2e;
+      border: 1px solid #2a2a3e;
+      border-radius: 16px;
+      padding: 16px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      cursor: pointer;
+      transition: border-color 0.2s, background 0.2s;
+    }
+    .stream-card:active { background: #22223a; }
+    .stream-card-left { display: flex; align-items: center; gap: 12px; flex: 1; }
+    .stream-avatar {
+      width: 48px; height: 48px;
+      background: linear-gradient(135deg, #FFD700, #FF8C00);
+      border-radius: 50%;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 22px; flex-shrink: 0;
+    }
+    .stream-info .title { font-size: 15px; font-weight: 600; color: #fff; margin-bottom: 4px; }
+    .stream-info .meta { font-size: 12px; color: #888; display: flex; gap: 8px; }
+    .meta .live-dot {
+      display: inline-flex; align-items: center; gap: 4px;
+      color: #FF3B3B; font-weight: 600;
+    }
+    .meta .live-dot::before {
+      content: '';
+      display: inline-block;
+      width: 7px; height: 7px;
+      background: #FF3B3B;
+      border-radius: 50%;
+      animation: pulse 1.2s ease-in-out infinite;
+    }
+    @keyframes pulse {
+      0%, 100% { opacity: 1; transform: scale(1); }
+      50% { opacity: 0.4; transform: scale(0.8); }
+    }
+    .btn-watch {
+      background: linear-gradient(135deg, #FFD700, #FF8C00);
+      border: none;
+      border-radius: 24px;
+      color: #000;
+      font-size: 13px;
+      font-weight: 700;
+      padding: 8px 16px;
+      cursor: pointer;
+      white-space: nowrap;
+      flex-shrink: 0;
+    }
+
+    .empty-state {
+      text-align: center;
+      padding: 60px 24px;
+      color: #555;
+    }
+    .empty-state p { font-size: 14px; margin-top: 12px; }
+
+    /* ── Watch Screen ── */
+    #watch-screen {
+      display: none;
+      width: 100%;
+      max-width: 480px;
+      min-height: 100vh;
+      flex-direction: column;
+      background: #000;
+      position: relative;
+    }
+
+    #video-container {
+      position: relative;
+      width: 100%;
+      flex: 1;
+      background: #111;
+      min-height: 300px;
+    }
+    #remote-video {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      display: block;
+    }
+
+    /* Audio overlay button */
+    #audio-overlay {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      background: rgba(0,0,0,0.75);
+      border: 2px solid #FFD700;
+      border-radius: 16px;
+      padding: 16px 24px;
+      text-align: center;
+      z-index: 20;
+      cursor: pointer;
+      transition: opacity 0.3s;
+    }
+    #audio-overlay .icon { font-size: 32px; }
+    #audio-overlay p { font-size: 13px; color: #FFD700; margin-top: 6px; font-weight: 600; }
+    #audio-overlay.hidden { display: none; }
+
+    /* Connection overlay */
+    #connecting-overlay {
+      position: absolute;
+      inset: 0;
+      background: rgba(0,0,0,0.85);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      z-index: 15;
+      gap: 12px;
+    }
+    #connecting-overlay.hidden { display: none; }
+    .spinner {
+      width: 40px; height: 40px;
+      border: 3px solid #333;
+      border-top-color: #FFD700;
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    #connecting-overlay p { color: #ccc; font-size: 14px; }
+
+    .overlay-top {
+      position: absolute;
+      top: 0; left: 0; right: 0;
+      padding: 12px 16px;
+      background: linear-gradient(to bottom, rgba(0,0,0,0.7), transparent);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      z-index: 10;
+    }
+    .live-badge {
+      background: #FF3B3B;
+      color: #fff;
+      font-size: 12px;
+      font-weight: 700;
+      padding: 4px 10px;
+      border-radius: 6px;
+      letter-spacing: 1px;
+    }
+    .viewer-count { color: #fff; font-size: 13px; }
+    #btn-leave {
+      background: rgba(0,0,0,0.6);
+      border: 1px solid #555;
+      border-radius: 8px;
+      color: #fff;
+      font-size: 13px;
+      padding: 6px 14px;
+      cursor: pointer;
+    }
+    .stream-title-bar {
+      position: absolute;
+      bottom: 0; left: 0; right: 0;
+      padding: 12px 16px;
+      background: linear-gradient(to top, rgba(0,0,0,0.7), transparent);
+      font-size: 14px;
+      font-weight: 600;
+      z-index: 10;
+    }
+
+    /* Chat */
+    .chat-panel {
+      height: 280px;
+      display: flex;
+      flex-direction: column;
+      background: #0a0a0f;
+    }
+    .chat-messages {
+      flex: 1;
+      overflow-y: auto;
+      padding: 12px 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+    .chat-messages::-webkit-scrollbar { width: 4px; }
+    .chat-messages::-webkit-scrollbar-thumb { background: #333; border-radius: 4px; }
+    .chat-msg { font-size: 14px; line-height: 1.5; }
+    .chat-msg .name { font-weight: 700; margin-right: 6px; }
+    .chat-msg.host .name { color: #FFD700; }
+    .chat-msg.viewer .name { color: #7ec8e3; }
+    .chat-msg .text { color: #e0e0e0; }
+    .chat-msg.system { color: #888; font-style: italic; font-size: 13px; }
+
+    .chat-input-row {
+      display: flex;
+      gap: 8px;
+      padding: 10px 16px;
+      border-top: 1px solid #1e1e2e;
+    }
+    .chat-input-row input {
+      flex: 1;
+      padding: 10px 14px;
+      background: #1a1a2e;
+      border: 1px solid #333;
+      border-radius: 24px;
+      color: #fff;
+      font-size: 14px;
+      outline: none;
+    }
+    .chat-input-row input:focus { border-color: #7ec8e3; }
+    .chat-input-row button {
+      padding: 10px 18px;
+      background: #7ec8e3;
+      border: none;
+      border-radius: 24px;
+      color: #000;
+      font-size: 14px;
+      font-weight: 700;
+      cursor: pointer;
+    }
+
+    /* Name prompt */
+    #name-prompt {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,0.85);
+      z-index: 100;
+      align-items: center;
+      justify-content: center;
+    }
+    #name-prompt.show { display: flex; }
+    .name-prompt-box {
+      background: #1a1a2e;
+      border-radius: 16px;
+      padding: 28px 24px;
+      width: 320px;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+    .name-prompt-box h2 { font-size: 18px; font-weight: 700; }
+    .name-prompt-box input {
+      padding: 12px 14px;
+      background: #0a0a0f;
+      border: 1px solid #333;
+      border-radius: 10px;
+      color: #fff;
+      font-size: 16px;
+      outline: none;
+    }
+    .name-prompt-box input:focus { border-color: #7ec8e3; }
+    .name-prompt-box button {
+      padding: 12px;
+      background: #7ec8e3;
+      border: none;
+      border-radius: 10px;
+      color: #000;
+      font-size: 15px;
+      font-weight: 700;
+      cursor: pointer;
+    }
+  </style>
+</head>
+<body>
+
+<!-- Name Prompt Modal -->
+<div id="name-prompt" class="show">
+  <div class="name-prompt-box">
+    <h2>👋 Siapa nama kamu?</h2>
+    <input type="text" id="input-viewername" placeholder="Nama panggilan" maxlength="30">
+    <button id="btn-set-name">Mulai Menonton</button>
+  </div>
+</div>
+
+<!-- Lobby -->
+<div id="lobby-screen">
+  <div class="lobby-header">
+    <h1>🎬 Live Sekarang</h1>
+    <button id="btn-refresh">🔄 Refresh</button>
+  </div>
+  <p class="lobby-subtitle">Pilih siaran yang ingin kamu tonton</p>
+
+  <div id="stream-list">
+    <div class="empty-state">
+      <div style="font-size:40px;">📡</div>
+      <p>Belum ada siaran aktif.<br>Coba refresh beberapa saat lagi.</p>
+    </div>
+  </div>
+</div>
+
+<!-- Watch Screen -->
+<div id="watch-screen">
+  <div id="video-container" style="height: calc(100vh - 280px); min-height: 300px;">
+    <div class="overlay-top">
+      <span class="live-badge">LIVE</span>
+      <span class="viewer-count">👁 <span id="viewer-count-num">0</span></span>
+      <button id="btn-leave">Keluar</button>
+    </div>
+
+    <div id="connecting-overlay">
+      <div class="spinner"></div>
+      <p>Menghubungkan ke siaran...</p>
+    </div>
+
+    <div id="audio-overlay">
+      <div class="icon">🔇</div>
+      <p>Klik untuk Aktifkan Suara</p>
+    </div>
+
+    <video id="remote-video" autoplay playsinline muted></video>
+    <div class="stream-title-bar" id="watch-title">Live Stream</div>
+  </div>
+
+  <div class="chat-panel">
+    <div class="chat-messages" id="chat-messages"></div>
+    <div class="chat-input-row">
+      <input type="text" id="chat-input" placeholder="Tulis komentar..." maxlength="200">
+      <button id="btn-send-chat">Kirim</button>
+    </div>
+  </div>
+</div>
+
+<script>
+  const socket = io(); // auto-detect URL
+
+  const ICE_CONFIG = {
+    iceServers: [
+      { urls: 'stun:stun.l.google.com:19302' },
+      { urls: 'stun:stun1.l.google.com:19302' },
+      { urls: 'stun:stun2.l.google.com:19302' },
+      { urls: 'stun:stun.services.mozilla.com' }
+    ]
+  };
+
+  let viewerName = 'Penonton';
+  let currentStreamId = null;
+  let peer = null;
+  let remoteVideo = document.getElementById('remote-video');
+  let audioUnlocked = false;
+  let reconnectAttempts = 0;
+
+  // ── Name Prompt ─────────────────────────────────────────────────────────────
+  document.getElementById('btn-set-name').addEventListener('click', () => {
+    const n = document.getElementById('input-viewername').value.trim();
+    if (!n) return;
+    viewerName = n;
+    document.getElementById('name-prompt').classList.remove('show');
+    socket.emit('streams:list');
+  });
+  document.getElementById('input-viewername').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') document.getElementById('btn-set-name').click();
+  });
+
+  // ── Lobby ────────────────────────────────────────────────────────────────────
+  socket.on('streams:update', (streams) => {
+    renderStreamList(streams);
+  });
+
+  document.getElementById('btn-refresh').addEventListener('click', () => {
+    socket.emit('streams:list');
+  });
+
+  function renderStreamList(streams) {
+    const list = document.getElementById('stream-list');
+    if (!streams || streams.length === 0) {
+      list.innerHTML = `
+        <div class="empty-state">
+          <div style="font-size:40px;">📡</div>
+          <p>Belum ada siaran aktif.<br>Coba refresh beberapa saat lagi.</p>
+        </div>`;
+      return;
+    }
+    list.innerHTML = streams.map(s => `
+      <div class="stream-card" onclick="joinStream('${s.streamId}', '${escapeHtml(s.title)}')">
+        <div class="stream-card-left">
+          <div class="stream-avatar">🎥</div>
+          <div class="stream-info">
+            <div class="title">${escapeHtml(s.title)}</div>
+            <div class="meta">
+              <span class="live-dot">LIVE</span>
+              <span>👁 ${s.viewerCount} penonton</span>
+            </div>
+          </div>
+        </div>
+        <button class="btn-watch">Tonton</button>
+      </div>
+    `).join('');
+  }
+
+  // ── Join Stream ──────────────────────────────────────────────────────────────
+  function joinStream(streamId, title) {
+    currentStreamId = streamId;
+    document.getElementById('watch-title').textContent = title;
+    document.getElementById('lobby-screen').style.display = 'none';
+    document.getElementById('watch-screen').style.display = 'flex';
+    document.getElementById('watch-screen').style.flexDirection = 'column';
+    document.getElementById('connecting-overlay').classList.remove('hidden');
+
+    socket.emit('viewer:join', { streamId });
+    addSystemMsg('Bergabung ke siaran "' + title + '"...');
+  }
+
+  // ── Receive Offer from Host (via server) ─────────────────────────────────────
+  socket.on('signal:offer', ({ from, signal }) => {
+    console.log('[PEER] Received offer from host');
+    reconnectAttempts = 0;
+
+    if (peer) { peer.destroy(); peer = null; }
+
+    peer = new SimplePeer({
+      initiator: false,
+      trickle: true,
+      config: ICE_CONFIG
+    });
+
+    peer.on('signal', (sig) => {
+      socket.emit('signal:answer', { to: from, signal: sig });
+    });
+
+    peer.on('stream', (stream) => {
+      console.log('[PEER] Got remote stream!');
+      remoteVideo.srcObject = stream;
+      remoteVideo.play().catch(() => {});
+      document.getElementById('connecting-overlay').classList.add('hidden');
+
+      // Show audio activation overlay if muted
+      if (!audioUnlocked) {
+        document.getElementById('audio-overlay').classList.remove('hidden');
+      }
+      addSystemMsg('Terhubung! Siaran sedang berlangsung.');
+    });
+
+    peer.on('connect', () => {
+      console.log('[PEER] Peer connected');
+      document.getElementById('connecting-overlay').classList.add('hidden');
+    });
+
+    peer.on('error', (err) => {
+      console.error('[PEER] Error:', err);
+      handlePeerError();
+    });
+
+    peer.on('close', () => {
+      console.log('[PEER] Peer closed');
+    });
+
+    peer.signal(signal);
+  });
+
+  // ── Receive ICE (trickle) ─────────────────────────────────────────────────────
+  socket.on('signal:ice', ({ from, candidate }) => {
+    if (peer) { try { peer.signal(candidate); } catch(e) { console.warn(e); } }
+  });
+
+  // ── Peer Error: Auto-reconnect ───────────────────────────────────────────────
+  function handlePeerError() {
+    reconnectAttempts++;
+    if (reconnectAttempts <= 3) {
+      addSystemMsg(`Koneksi bermasalah. Mencoba ulang (${reconnectAttempts}/3)...`);
+      document.getElementById('connecting-overlay').classList.remove('hidden');
+      setTimeout(() => {
+        if (peer) { peer.destroy(); peer = null; }
+        if (currentStreamId) socket.emit('viewer:join', { streamId: currentStreamId });
+      }, 2000);
+    } else {
+      addSystemMsg('Gagal terhubung setelah 3 percobaan. Coba refresh halaman.');
+    }
+  }
+
+  // ── Stream Ended ─────────────────────────────────────────────────────────────
+  socket.on('stream:ended', () => {
+    addSystemMsg('Siaran telah diakhiri oleh host.');
+    document.getElementById('connecting-overlay').classList.remove('hidden');
+    document.querySelector('#connecting-overlay p').textContent = 'Siaran telah berakhir';
+    document.querySelector('.spinner').style.display = 'none';
+    if (peer) { peer.destroy(); peer = null; }
+  });
+
+  socket.on('stream:not-found', () => {
+    addSystemMsg('Siaran tidak ditemukan atau sudah berakhir.');
+    document.getElementById('connecting-overlay').classList.remove('hidden');
+    document.querySelector('#connecting-overlay p').textContent = 'Siaran tidak ditemukan';
+  });
+
+  // ── Audio Unlock ─────────────────────────────────────────────────────────────
+  document.getElementById('audio-overlay').addEventListener('click', () => {
+    remoteVideo.muted = false;
+    remoteVideo.play().catch(() => {});
+    audioUnlocked = true;
+    document.getElementById('audio-overlay').classList.add('hidden');
+  });
+
+  // ── Viewer Count ─────────────────────────────────────────────────────────────
+  socket.on('viewers:count', ({ count }) => {
+    document.getElementById('viewer-count-num').textContent = count;
+  });
+
+  // ── Chat ─────────────────────────────────────────────────────────────────────
+  socket.on('chat:message', ({ username, message, role }) => {
+    addChatMessage(username, message, role);
+  });
+
+  document.getElementById('btn-send-chat').addEventListener('click', sendChat);
+  document.getElementById('chat-input').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') sendChat();
+  });
+
+  function sendChat() {
+    const msg = document.getElementById('chat-input').value.trim();
+    if (!msg || !currentStreamId) return;
+    socket.emit('chat:message', {
+      streamId: currentStreamId,
+      message: msg,
+      username: viewerName,
+      role: 'viewer'
+    });
+    document.getElementById('chat-input').value = '';
+  }
+
+  // ── Leave ─────────────────────────────────────────────────────────────────────
+  document.getElementById('btn-leave').addEventListener('click', () => {
+    if (peer) { peer.destroy(); peer = null; }
+    currentStreamId = null;
+    document.getElementById('watch-screen').style.display = 'none';
+    document.getElementById('lobby-screen').style.display = 'flex';
+    document.getElementById('lobby-screen').style.flexDirection = 'column';
+    document.getElementById('connecting-overlay').classList.remove('hidden');
+    document.querySelector('#connecting-overlay p').textContent = 'Menghubungkan ke siaran...';
+    document.querySelector('.spinner').style.display = '';
+    remoteVideo.srcObject = null;
+    audioUnlocked = false;
+    socket.emit('streams:list');
+  });
+
+  // ── Helpers ───────────────────────────────────────────────────────────────────
+  function addChatMessage(username, message, role) {
+    const chatMessages = document.getElementById('chat-messages');
+    const div = document.createElement('div');
+    div.className = `chat-msg ${role}`;
+    div.innerHTML = `<span class="name">${escapeHtml(username)}:</span><span class="text">${escapeHtml(message)}</span>`;
+    chatMessages.appendChild(div);
+    chatMessages.scrollTop = chatMessages.scrollHeight;
+  }
+
+  function addSystemMsg(text) {
+    const chatMessages = document.getElementById('chat-messages');
+    const div = document.createElement('div');
+    div.className = 'chat-msg system';
+    div.textContent = text;
+    chatMessages.appendChild(div);
+    chatMessages.scrollTop = chatMessages.scrollHeight;
+  }
+
+  function escapeHtml(str) {
+    const div = document.createElement('div');
+    div.appendChild(document.createTextNode(str));
+    return div.innerHTML;
+  }
+
+  // ── Socket disconnect/reconnect ───────────────────────────────────────────────
+  socket.on('disconnect', () => {
+    addSystemMsg('Koneksi server terputus, mencoba ulang...');
+  });
+  socket.on('reconnect', () => {
+    addSystemMsg('Terhubung kembali ke server.');
+    if (currentStreamId) {
+      socket.emit('viewer:join', { streamId: currentStreamId });
+    }
+  });
+</script>
+</body>
+</html>

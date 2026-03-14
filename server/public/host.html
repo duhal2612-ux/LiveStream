@@ -1,0 +1,393 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>LiveStream - Host</title>
+  <script src="/socket.io/socket.io.js"></script>
+  <script src="https://unpkg.com/simple-peer@9.11.1/simplepeer.min.js"></script>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      background: #0a0a0f;
+      color: #fff;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+    }
+
+    #setup-screen {
+      width: 100%;
+      max-width: 480px;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      align-items: center;
+      padding: 32px 24px;
+      gap: 20px;
+    }
+    #setup-screen h1 { font-size: 28px; font-weight: 700; color: #FFD700; }
+    #setup-screen p { color: #888; font-size: 14px; text-align: center; }
+    #setup-screen input {
+      width: 100%;
+      padding: 14px 16px;
+      background: #1a1a2e;
+      border: 1px solid #333;
+      border-radius: 12px;
+      color: #fff;
+      font-size: 16px;
+      outline: none;
+    }
+    #setup-screen input:focus { border-color: #FFD700; }
+    #btn-start-stream {
+      width: 100%;
+      padding: 16px;
+      background: linear-gradient(135deg, #FFD700, #FF8C00);
+      border: none;
+      border-radius: 12px;
+      color: #000;
+      font-size: 18px;
+      font-weight: 700;
+      cursor: pointer;
+      transition: opacity 0.2s;
+    }
+    #btn-start-stream:active { opacity: 0.8; }
+
+    #stream-screen {
+      display: none;
+      width: 100%;
+      max-width: 480px;
+      min-height: 100vh;
+      flex-direction: column;
+      position: relative;
+      background: #000;
+    }
+
+    #video-container {
+      position: relative;
+      width: 100%;
+      flex: 1;
+      background: #111;
+    }
+    #local-video {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      display: block;
+    }
+
+    /* Overlay info bar */
+    .overlay-top {
+      position: absolute;
+      top: 0; left: 0; right: 0;
+      padding: 12px 16px;
+      background: linear-gradient(to bottom, rgba(0,0,0,0.7), transparent);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      z-index: 10;
+    }
+    .live-badge {
+      background: #FF3B3B;
+      color: #fff;
+      font-size: 12px;
+      font-weight: 700;
+      padding: 4px 10px;
+      border-radius: 6px;
+      letter-spacing: 1px;
+    }
+    .viewer-count {
+      color: #fff;
+      font-size: 13px;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .viewer-count span { font-size: 16px; }
+
+    #btn-end-stream {
+      background: #FF3B3B;
+      border: none;
+      border-radius: 8px;
+      color: #fff;
+      font-size: 13px;
+      font-weight: 600;
+      padding: 6px 14px;
+      cursor: pointer;
+    }
+
+    /* Chat panel */
+    .chat-panel {
+      height: 280px;
+      display: flex;
+      flex-direction: column;
+      background: #0a0a0f;
+    }
+    .chat-messages {
+      flex: 1;
+      overflow-y: auto;
+      padding: 12px 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+    .chat-messages::-webkit-scrollbar { width: 4px; }
+    .chat-messages::-webkit-scrollbar-thumb { background: #333; border-radius: 4px; }
+
+    .chat-msg { font-size: 14px; line-height: 1.5; }
+    .chat-msg .name { font-weight: 700; margin-right: 6px; }
+    .chat-msg.host .name { color: #FFD700; }
+    .chat-msg.viewer .name { color: #7ec8e3; }
+    .chat-msg .text { color: #e0e0e0; }
+    .chat-msg.system { color: #888; font-style: italic; font-size: 13px; }
+
+    .chat-input-row {
+      display: flex;
+      gap: 8px;
+      padding: 10px 16px;
+      border-top: 1px solid #1e1e2e;
+    }
+    .chat-input-row input {
+      flex: 1;
+      padding: 10px 14px;
+      background: #1a1a2e;
+      border: 1px solid #333;
+      border-radius: 24px;
+      color: #fff;
+      font-size: 14px;
+      outline: none;
+    }
+    .chat-input-row input:focus { border-color: #FFD700; }
+    .chat-input-row button {
+      padding: 10px 18px;
+      background: #FFD700;
+      border: none;
+      border-radius: 24px;
+      color: #000;
+      font-size: 14px;
+      font-weight: 700;
+      cursor: pointer;
+    }
+    .chat-input-row button:active { opacity: 0.8; }
+
+    #status-bar {
+      font-size: 12px;
+      color: #888;
+      padding: 6px 16px;
+      background: #0a0a0f;
+      text-align: center;
+    }
+  </style>
+</head>
+<body>
+
+<!-- Setup Screen -->
+<div id="setup-screen">
+  <h1>🎥 Mulai Live</h1>
+  <p>Isi detail siaran Anda, lalu izinkan akses kamera & mikrofon</p>
+  <input type="text" id="input-title" placeholder="Judul siaran (contoh: Gaming Seru!)" maxlength="60">
+  <input type="text" id="input-username" placeholder="Nama panggilan Anda" maxlength="30">
+  <button id="btn-start-stream">🔴 Mulai Siaran</button>
+  <p id="error-msg" style="color:#FF3B3B; display:none;"></p>
+</div>
+
+<!-- Stream Screen -->
+<div id="stream-screen">
+  <div id="video-container" style="height: calc(100vh - 280px); min-height: 300px;">
+    <div class="overlay-top">
+      <span class="live-badge">LIVE</span>
+      <span class="viewer-count"><span>👁</span> <span id="viewer-count-num">0</span> penonton</span>
+      <button id="btn-end-stream">Akhiri</button>
+    </div>
+    <video id="local-video" autoplay playsinline muted></video>
+  </div>
+
+  <div id="status-bar">Menunggu penonton...</div>
+
+  <div class="chat-panel">
+    <div class="chat-messages" id="chat-messages"></div>
+    <div class="chat-input-row">
+      <input type="text" id="chat-input" placeholder="Ketik pesan..." maxlength="200">
+      <button id="btn-send-chat">Kirim</button>
+    </div>
+  </div>
+</div>
+
+<script>
+  // ─── State ─────────────────────────────────────────────────────────────────
+  const socket = io(); // auto-detect URL (works with Ngrok)
+  let localStream = null;
+  let streamId = null;
+  let hostUsername = 'Host';
+  const peers = {}; // { viewerSocketId: SimplePeer instance }
+
+  const ICE_CONFIG = {
+    iceServers: [
+      { urls: 'stun:stun.l.google.com:19302' },
+      { urls: 'stun:stun1.l.google.com:19302' },
+      { urls: 'stun:stun2.l.google.com:19302' },
+      { urls: 'stun:stun.services.mozilla.com' }
+    ]
+  };
+
+  // ─── UI Elements ────────────────────────────────────────────────────────────
+  const setupScreen = document.getElementById('setup-screen');
+  const streamScreen = document.getElementById('stream-screen');
+  const localVideo = document.getElementById('local-video');
+  const viewerCountEl = document.getElementById('viewer-count-num');
+  const chatMessages = document.getElementById('chat-messages');
+  const chatInput = document.getElementById('chat-input');
+  const statusBar = document.getElementById('status-bar');
+  const errorMsg = document.getElementById('error-msg');
+
+  // ─── Start Stream ───────────────────────────────────────────────────────────
+  document.getElementById('btn-start-stream').addEventListener('click', async () => {
+    const title = document.getElementById('input-title').value.trim() || 'Live Stream';
+    hostUsername = document.getElementById('input-username').value.trim() || 'Host';
+
+    try {
+      localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+      localVideo.srcObject = localStream;
+
+      streamId = 'stream_' + Date.now() + '_' + Math.random().toString(36).substr(2, 6);
+      socket.emit('host:start', { streamId, title });
+
+      setupScreen.style.display = 'none';
+      streamScreen.style.display = 'flex';
+      streamScreen.style.flexDirection = 'column';
+
+      addSystemMsg('Siaran dimulai! Bagikan link siaran kepada penonton.');
+    } catch (err) {
+      errorMsg.style.display = 'block';
+      errorMsg.textContent = '⚠️ Gagal akses kamera/mikrofon: ' + err.message;
+    }
+  });
+
+  // ─── End Stream ─────────────────────────────────────────────────────────────
+  document.getElementById('btn-end-stream').addEventListener('click', () => {
+    if (!confirm('Akhiri siaran sekarang?')) return;
+    socket.emit('host:end', { streamId });
+    Object.values(peers).forEach(p => p.destroy());
+    if (localStream) localStream.getTracks().forEach(t => t.stop());
+    location.reload();
+  });
+
+  // ─── New Viewer Joined: Create Peer as Initiator ────────────────────────────
+  socket.on('viewer:joined', ({ viewerSocketId }) => {
+    console.log('[PEER] Creating peer for viewer:', viewerSocketId);
+    statusBar.textContent = 'Penonton baru bergabung, menghubungkan...';
+
+    const peer = new SimplePeer({
+      initiator: true,
+      stream: localStream,
+      trickle: true,
+      config: ICE_CONFIG
+    });
+
+    peer.on('signal', (signal) => {
+      socket.emit('signal:offer', { to: viewerSocketId, signal });
+    });
+
+    peer.on('connect', () => {
+      statusBar.textContent = 'Terhubung dengan penonton';
+      console.log('[PEER] Connected to viewer:', viewerSocketId);
+    });
+
+    peer.on('error', (err) => {
+      console.error('[PEER] Error with viewer', viewerSocketId, err);
+      statusBar.textContent = 'Koneksi peer error, mencoba ulang...';
+      // Auto-reconnect: destroy and wait for viewer to rejoin
+      setTimeout(() => {
+        if (peers[viewerSocketId]) {
+          peers[viewerSocketId].destroy();
+          delete peers[viewerSocketId];
+        }
+      }, 2000);
+    });
+
+    peer.on('close', () => {
+      delete peers[viewerSocketId];
+      console.log('[PEER] Peer closed:', viewerSocketId);
+    });
+
+    peers[viewerSocketId] = peer;
+  });
+
+  // ─── Receive Answer from Viewer ─────────────────────────────────────────────
+  socket.on('signal:answer', ({ from, signal }) => {
+    if (peers[from]) {
+      peers[from].signal(signal);
+    }
+  });
+
+  // ─── Receive ICE candidate (trickle) ────────────────────────────────────────
+  socket.on('signal:ice', ({ from, candidate }) => {
+    if (peers[from]) {
+      peers[from].signal(candidate);
+    }
+  });
+
+  // ─── Viewer Left ────────────────────────────────────────────────────────────
+  socket.on('viewer:left', ({ viewerSocketId }) => {
+    if (peers[viewerSocketId]) {
+      peers[viewerSocketId].destroy();
+      delete peers[viewerSocketId];
+    }
+  });
+
+  // ─── Viewer Count Update ─────────────────────────────────────────────────────
+  socket.on('viewers:count', ({ count }) => {
+    viewerCountEl.textContent = count;
+  });
+
+  // ─── Chat ─────────────────────────────────────────────────────────────────
+  socket.on('chat:message', ({ username, message, role }) => {
+    addChatMessage(username, message, role);
+  });
+
+  document.getElementById('btn-send-chat').addEventListener('click', sendChat);
+  chatInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') sendChat(); });
+
+  function sendChat() {
+    const msg = chatInput.value.trim();
+    if (!msg || !streamId) return;
+    socket.emit('chat:message', { streamId, message: msg, username: hostUsername, role: 'host' });
+    chatInput.value = '';
+  }
+
+  function addChatMessage(username, message, role) {
+    const div = document.createElement('div');
+    div.className = `chat-msg ${role}`;
+    div.innerHTML = `<span class="name">${escapeHtml(username)}:</span><span class="text">${escapeHtml(message)}</span>`;
+    chatMessages.appendChild(div);
+    chatMessages.scrollTop = chatMessages.scrollHeight;
+  }
+
+  function addSystemMsg(text) {
+    const div = document.createElement('div');
+    div.className = 'chat-msg system';
+    div.textContent = text;
+    chatMessages.appendChild(div);
+    chatMessages.scrollTop = chatMessages.scrollHeight;
+  }
+
+  function escapeHtml(str) {
+    const div = document.createElement('div');
+    div.appendChild(document.createTextNode(str));
+    return div.innerHTML;
+  }
+
+  // ─── Socket Reconnect Handling ───────────────────────────────────────────────
+  socket.on('disconnect', () => {
+    statusBar.textContent = 'Koneksi terputus, mencoba ulang...';
+  });
+  socket.on('reconnect', () => {
+    if (streamId) socket.emit('host:start', { streamId, title: 'Live (reconnected)' });
+    statusBar.textContent = 'Terhubung kembali!';
+  });
+</script>
+</body>
+</html>
