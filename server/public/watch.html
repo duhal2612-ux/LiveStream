@@ -136,6 +136,40 @@
       display: block;
     }
 
+    /* Click-to-watch overlay */
+    #click-to-watch {
+      position: absolute;
+      inset: 0;
+      background: rgba(0,0,0,0.82);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      z-index: 25;
+      cursor: pointer;
+      gap: 14px;
+    }
+    #click-to-watch.hidden { display: none; }
+    #click-to-watch .ctw-icon { font-size: 52px; }
+    #click-to-watch .ctw-btn {
+      background: linear-gradient(135deg, #FFD700, #FF8C00);
+      border: none;
+      border-radius: 32px;
+      color: #000;
+      font-size: 16px;
+      font-weight: 800;
+      padding: 14px 36px;
+      cursor: pointer;
+      letter-spacing: 0.5px;
+      box-shadow: 0 0 24px rgba(255, 215, 0, 0.4);
+      animation: glow 1.5s ease-in-out infinite alternate;
+    }
+    @keyframes glow {
+      from { box-shadow: 0 0 12px rgba(255,215,0,0.3); }
+      to   { box-shadow: 0 0 32px rgba(255,140,0,0.8); }
+    }
+    #click-to-watch p { font-size: 13px; color: #aaa; }
+
     /* Audio overlay button */
     #audio-overlay {
       position: absolute;
@@ -353,7 +387,14 @@
       <p>Menghubungkan ke siaran...</p>
     </div>
 
-    <div id="audio-overlay">
+    <!-- Click-to-watch: required by browser autoplay policy -->
+    <div id="click-to-watch" class="hidden">
+      <div class="ctw-icon">▶️</div>
+      <button class="ctw-btn">KLIK UNTUK TONTON LIVE</button>
+      <p>Sentuh layar untuk memulai video & suara</p>
+    </div>
+
+    <div id="audio-overlay" class="hidden">
       <div class="icon">🔇</div>
       <p>Klik untuk Aktifkan Suara</p>
     </div>
@@ -379,8 +420,10 @@
       { urls: 'stun:stun.l.google.com:19302' },
       { urls: 'stun:stun1.l.google.com:19302' },
       { urls: 'stun:stun2.l.google.com:19302' },
+      { urls: 'stun:stun3.l.google.com:19302' },
       { urls: 'stun:stun.services.mozilla.com' }
-    ]
+    ],
+    sdpSemantics: 'unified-plan'
   };
 
   let viewerName = 'Penonton';
@@ -469,15 +512,25 @@
     });
 
     peer.on('stream', (stream) => {
-      console.log('[PEER] Got remote stream!');
+      console.log('[PEER] Got remote stream!', stream);
       remoteVideo.srcObject = stream;
-      remoteVideo.play().catch(() => {});
       document.getElementById('connecting-overlay').classList.add('hidden');
 
-      // Show audio activation overlay if muted
-      if (!audioUnlocked) {
-        document.getElementById('audio-overlay').classList.remove('hidden');
+      // Try autoplay first; if blocked, show click-to-watch overlay
+      const playPromise = remoteVideo.play();
+      if (playPromise !== undefined) {
+        playPromise.then(() => {
+          console.log('[VIDEO] Autoplay succeeded');
+          // Video playing muted — show audio unlock button
+          if (!audioUnlocked) {
+            document.getElementById('audio-overlay').classList.remove('hidden');
+          }
+        }).catch((err) => {
+          console.warn('[VIDEO] Autoplay blocked, showing click overlay:', err);
+          document.getElementById('click-to-watch').classList.remove('hidden');
+        });
       }
+
       addSystemMsg('Terhubung! Siaran sedang berlangsung.');
     });
 
@@ -533,7 +586,20 @@
     document.querySelector('#connecting-overlay p').textContent = 'Siaran tidak ditemukan';
   });
 
-  // ── Audio Unlock ─────────────────────────────────────────────────────────────
+  // ── Click-to-Watch: user gesture unlocks autoplay & audio ─────────────────────
+  document.getElementById('click-to-watch').addEventListener('click', () => {
+    remoteVideo.muted = false;
+    remoteVideo.play().then(() => {
+      audioUnlocked = true;
+      document.getElementById('click-to-watch').classList.add('hidden');
+      document.getElementById('audio-overlay').classList.add('hidden');
+      console.log('[VIDEO] Playback started via user gesture');
+    }).catch((err) => {
+      console.error('[VIDEO] Play failed even after gesture:', err);
+    });
+  });
+
+  // ── Audio Unlock (fallback if video already playing muted) ────────────────────
   document.getElementById('audio-overlay').addEventListener('click', () => {
     remoteVideo.muted = false;
     remoteVideo.play().catch(() => {});
