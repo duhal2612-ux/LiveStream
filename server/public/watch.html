@@ -421,9 +421,9 @@
       { urls: 'stun:stun1.l.google.com:19302' },
       { urls: 'stun:stun2.l.google.com:19302' },
       { urls: 'stun:stun3.l.google.com:19302' },
+      { urls: 'stun:stun4.l.google.com:19302' },
       { urls: 'stun:stun.services.mozilla.com' }
-    ],
-    sdpSemantics: 'unified-plan'
+    ]
   };
 
   let viewerName = 'Penonton';
@@ -494,12 +494,49 @@
     addSystemMsg('Bergabung ke siaran "' + title + '"...');
   }
 
+  // ── Helper: attach stream to video element ────────────────────────────────────
+  function attachStream(stream) {
+    console.log('[VIDEO] Attaching stream, tracks:', stream.getTracks().length);
+    remoteVideo.srcObject = stream;
+    document.getElementById('connecting-overlay').classList.add('hidden');
+
+    // Play when metadata is ready (more reliable than immediate play)
+    remoteVideo.onloadedmetadata = () => {
+      console.log('[VIDEO] Metadata loaded, attempting play...');
+      const playPromise = remoteVideo.play();
+      if (playPromise !== undefined) {
+        playPromise.then(() => {
+          console.log('[VIDEO] Autoplay (muted) succeeded');
+          if (!audioUnlocked) {
+            document.getElementById('audio-overlay').classList.remove('hidden');
+          }
+        }).catch((err) => {
+          console.warn('[VIDEO] Autoplay blocked:', err);
+          document.getElementById('click-to-watch').classList.remove('hidden');
+        });
+      }
+    };
+
+    // Fallback: if metadata event already fired or doesn't fire
+    setTimeout(() => {
+      if (remoteVideo.readyState >= 2 && remoteVideo.paused) {
+        remoteVideo.play().catch(() => {
+          document.getElementById('click-to-watch').classList.remove('hidden');
+        });
+      }
+    }, 1500);
+
+    addSystemMsg('Stream diterima! Menghubungkan video...');
+  }
+
   // ── Receive Offer from Host (via server) ─────────────────────────────────────
   socket.on('signal:offer', ({ from, signal }) => {
-    console.log('[PEER] Received offer from host');
+    console.log('[PEER] Received offer from host:', from);
     reconnectAttempts = 0;
 
     if (peer) { peer.destroy(); peer = null; }
+
+    const streams = {}; // collect tracks into streams manually
 
     peer = new SimplePeer({
       initiator: false,
@@ -511,31 +548,36 @@
       socket.emit('signal:answer', { to: from, signal: sig });
     });
 
+    // Primary: stream event (SimplePeer bundles tracks into MediaStream)
     peer.on('stream', (stream) => {
-      console.log('[PEER] Got remote stream!', stream);
-      remoteVideo.srcObject = stream;
-      document.getElementById('connecting-overlay').classList.add('hidden');
+      console.log('[PEER] Got stream event, tracks:', stream.getTracks().length);
+      attachStream(stream);
+    });
 
-      // Try autoplay first; if blocked, show click-to-watch overlay
-      const playPromise = remoteVideo.play();
-      if (playPromise !== undefined) {
-        playPromise.then(() => {
-          console.log('[VIDEO] Autoplay succeeded');
-          // Video playing muted — show audio unlock button
-          if (!audioUnlocked) {
-            document.getElementById('audio-overlay').classList.remove('hidden');
+    // Fallback: track event (fires individually per track in some browsers)
+    peer.on('track', (track, stream) => {
+      console.log('[PEER] Got track event:', track.kind, 'stream:', stream ? stream.id : 'none');
+      if (stream && stream.getTracks().length > 0) {
+        // Debounce: wait briefly for all tracks to arrive then attach
+        clearTimeout(peer._attachTimer);
+        peer._attachTimer = setTimeout(() => {
+          if (!remoteVideo.srcObject || remoteVideo.srcObject.getTracks().length === 0) {
+            attachStream(stream);
           }
-        }).catch((err) => {
-          console.warn('[VIDEO] Autoplay blocked, showing click overlay:', err);
-          document.getElementById('click-to-watch').classList.remove('hidden');
-        });
+        }, 300);
+      } else {
+        // Build stream manually from tracks
+        if (!peer._manualStream) peer._manualStream = new MediaStream();
+        peer._manualStream.addTrack(track);
+        clearTimeout(peer._attachTimer);
+        peer._attachTimer = setTimeout(() => {
+          if (!remoteVideo.srcObject) attachStream(peer._manualStream);
+        }, 300);
       }
-
-      addSystemMsg('Terhubung! Siaran sedang berlangsung.');
     });
 
     peer.on('connect', () => {
-      console.log('[PEER] Peer connected');
+      console.log('[PEER] Data channel connected');
       document.getElementById('connecting-overlay').classList.add('hidden');
     });
 
@@ -548,7 +590,11 @@
       console.log('[PEER] Peer closed');
     });
 
-    peer.signal(signal);
+    try {
+      peer.signal(signal);
+    } catch(e) {
+      console.error('[PEER] signal() error:', e);
+    }
   });
 
   // ── Receive ICE (trickle) ─────────────────────────────────────────────────────
